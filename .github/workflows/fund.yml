@@ -18,7 +18,8 @@ on:
 permissions:
   contents: write
 concurrency:
-  group: fund-commit
+  # 按档位分组：8 个档互不顶掉（否则 pending 会被同组新 run 替换，导致 3m/5m/7m 叠加时丢采样）
+  group: fund-commit-${{ github.event.inputs.bucket }}
   cancel-in-progress: false
 jobs:
   sample:
