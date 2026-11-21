@@ -1,9 +1,20 @@
 name: fund-watch
+# 币安保险基金分层采样（多档质数间隔，由 cron-job.org 的 8 个 job 定时 dispatch）
+#   3m/5m/7m → 全站 + 关注币所在组
+#   13m/23m/37m/47m → 全站 + 124 组全量
+#   101m → 全站 + 124 组 + 分资产（每小时 :41 触发 + min-gap 6060 秒节流）
+# 数据：data/fund/<bucket>_YYYYMM.jsonl（旧 data/fund/YYYYMM.jsonl 保留不动）
 on:
-  schedule:
-    # 最小 cron 间隔 5 分钟（GitHub 硬限制）；2-57/5 避开整点拥堵段
-    - cron: "2-57/5 * * * *"
   workflow_dispatch:
+    inputs:
+      bucket:
+        description: "3m/5m/7m/13m/23m/37m/47m/101m"
+        required: true
+        default: "5m"
+      min_gap:
+        description: "秒；101m 档传 6060"
+        required: false
+        default: "0"
 permissions:
   contents: write
 concurrency:
@@ -12,14 +23,25 @@ concurrency:
 jobs:
   sample:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - name: sample
-        run: python3 scripts/fund_watch.py --symbols EVAA,ETH,PEPE,BONK --out data/fund
+        run: python3 scripts/fund_watch.py --bucket "${{ inputs.bucket }}" --min-gap "${{ inputs.min_gap }}" --out data/fund
       - name: commit
         run: |
           git config user.name "fund-watch"
           git config user.email "fund-watch@users.noreply.github.com"
           git add data/fund
-          git commit -m "fund $(date -u +%Y-%m-%dT%H:%MZ)" || echo "no changes"
-          for i in 1 2 3; do git push && break || sleep 3; done
+          git diff --cached --quiet || git commit -m "fund ${{ inputs.bucket }} $(date -u +%FT%TZ)"
+          for i in 1 2 3; do
+            git pull --rebase --autostash origin main >/dev/null 2>&1 || true
+            if git push origin HEAD:main; then break; fi
+            echo "push 重试 $i"; sleep 3
+          done
